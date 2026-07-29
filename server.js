@@ -65,6 +65,17 @@ io.on('connection', (socket) => {
     io.to(ROOM).emit('message', msg);
   });
 
+  socket.on('image', ({ dataUrl, caption }) => {
+    if (!socket.verified || !socket.username) return;
+    if (!dataUrl || !dataUrl.startsWith('data:image/')) return;
+    if (dataUrl.length > 3 * 1024 * 1024) return; // ~2MB base64 limit
+    const msg = { type: 'image', user: socket.username, dataUrl, caption: caption || '', time: new Date().toISOString() };
+    messages.push(msg);
+    if (messages.length > MAX_MESSAGES) messages.shift();
+    saveHistory(messages);
+    io.to(ROOM).emit('image', msg);
+  });
+
   socket.on('disconnect', () => {
     if (socket.username) {
       io.to(ROOM).emit('system', `${socket.username} left`);
