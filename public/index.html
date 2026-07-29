@@ -1,1 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chat</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0f0f0f;
+    color: #e0e0e0;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .screen {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    max-width: 320px;
+    padding: 24px;
+  }
+  .screen.active { display: flex; }
+
+  .screen h1 { font-size: 1.3rem; font-weight: 600; color: #fff; }
+  .screen p.hint { font-size: 0.8rem; color: #555; text-align: center; }
+
+  .screen input {
+    width: 100%;
+    padding: 12px 16px;
+    background: #1a1a1a;
+    border: 1px solid #2e2e2e;
+    border-radius: 10px;
+    color: #fff;
+    font-size: 1rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .screen input:focus { border-color: #4f8fff; }
+  .screen input.error { border-color: #e05555; }
+
+  .screen button {
+    width: 100%;
+    padding: 12px;
+    background: #4f8fff;
+    border: none;
+    border-radius: 10px;
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .screen button:hover { background: #3a6fd8; }
+
+  .err-msg { font-size: 0.8rem; color: #e05555; }
+
+  /* Chat */
+  #chat-screen {
+    display: none;
+    flex-direction: column;
+    width: 100%;
+    max-width: 680px;
+    height: 100dvh;
+  }
+
+  #chat-header {
+    padding: 14px 20px;
+    background: #161616;
+    border-bottom: 1px solid #222;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  #chat-header .dot { width: 8px; height: 8px; border-radius: 50%; background: #4caf50; }
+  #chat-header strong { color: #fff; font-size: 1rem; }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    scroll-behavior: smooth;
+  }
+  #messages::-webkit-scrollbar { width: 4px; }
+  #messages::-webkit-scrollbar-thumb { background: #2e2e2e; border-radius: 4px; }
+
+  .msg { display: flex; flex-direction: column; max-width: 72%; }
+  .msg.mine { align-self: flex-end; align-items: flex-end; }
+  .msg.theirs { align-self: flex-start; align-items: flex-start; }
+
+  .msg .bubble {
+    padding: 9px 14px;
+    border-radius: 16px;
+    font-size: 0.95rem;
+    line-height: 1.45;
+    word-break: break-word;
+  }
+  .msg.mine .bubble { background: #4f8fff; color: #fff; border-bottom-right-radius: 4px; }
+  .msg.theirs .bubble { background: #1e1e1e; color: #e0e0e0; border-bottom-left-radius: 4px; }
+  .msg .meta { font-size: 0.7rem; color: #555; margin-top: 3px; padding: 0 4px; }
+
+  .system-msg { align-self: center; font-size: 0.75rem; color: #444; padding: 4px 0; }
+
+  #input-area {
+    padding: 12px 16px;
+    background: #161616;
+    border-top: 1px solid #222;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  #msg-input {
+    flex: 1;
+    padding: 11px 16px;
+    background: #1a1a1a;
+    border: 1px solid #2e2e2e;
+    border-radius: 24px;
+    color: #fff;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  #msg-input:focus { border-color: #4f8fff; }
+  #send-btn {
+    width: 42px; height: 42px;
+    background: #4f8fff;
+    border: none; border-radius: 50%;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.2s;
+  }
+  #send-btn:hover { background: #3a6fd8; }
+  #send-btn svg { width: 18px; height: 18px; fill: #fff; }
+</style>
+</head>
+<body>
+
+<!-- Step 1: PIN -->
+<div id="pin-screen" class="screen active">
+  <h1>🔒 Enter PIN</h1>
+  <input id="pin-input" type="password" placeholder="PIN" maxlength="20" autofocus />
+  <span class="err-msg" id="pin-err"></span>
+  <button onclick="verifyPin()">Continue</button>
+</div>
+
+<!-- Step 2: Name -->
+<div id="name-screen" class="screen">
+  <h1>💬 Your name</h1>
+  <input id="name-input" type="text" placeholder="Name" maxlength="24" />
+  <button onclick="joinChat()">Join Chat</button>
+</div>
+
+<!-- Step 3: Chat -->
+<div id="chat-screen">
+  <div id="chat-header">
+    <div class="dot"></div>
+    <strong>Private Chat</strong>
+  </div>
+  <div id="messages"></div>
+  <div id="input-area">
+    <input id="msg-input" type="text" placeholder="Type a message…" maxlength="1000" />
+    <button id="send-btn" onclick="sendMsg()">
+      <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>
+    </button>
+  </div>
+</div>
+
+<script>
+  const socket = io();
+  let myName = '';
+
+  function show(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    const el = document.getElementById(id);
+    if (el.classList.contains('screen')) el.classList.add('active');
+    else el.style.display = 'flex';
+  }
+
+  // PIN
+  function verifyPin() {
+    const pin = document.getElementById('pin-input').value.trim();
+    if (!pin) return;
+    socket.emit('verify-pin', pin, (res) => {
+      if (res.ok) {
+        document.getElementById('pin-screen').classList.remove('active');
+        document.getElementById('name-screen').classList.add('active');
+        setTimeout(() => document.getElementById('name-input').focus(), 100);
+      } else {
+        const inp = document.getElementById('pin-input');
+        inp.classList.add('error');
+        document.getElementById('pin-err').textContent = 'Wrong PIN';
+        inp.value = '';
+        setTimeout(() => inp.classList.remove('error'), 1500);
+      }
+    });
+  }
+
+  // Join
+  function joinChat() {
+    const name = document.getElementById('name-input').value.trim();
+    if (!name) return;
+    myName = name;
+    socket.emit('join', name);
+    document.getElementById('name-screen').classList.remove('active');
+    document.getElementById('chat-screen').style.display = 'flex';
+    document.getElementById('msg-input').focus();
+  }
+
+  // Send
+  function sendMsg() {
+    const input = document.getElementById('msg-input');
+    const text = input.value.trim();
+    if (!text) return;
+    socket.emit('message', text);
+    input.value = '';
+  }
+
+  // Enter keys
+  document.getElementById('pin-input').addEventListener('keydown', e => { if (e.key === 'Enter') verifyPin(); });
+  document.getElementById('name-input').addEventListener('keydown', e => { if (e.key === 'Enter') joinChat(); });
+  document.getElementById('msg-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); }
+  });
+
+  function formatTime(iso) {
+    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function escHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function appendMessage(msg) {
+    const box = document.getElementById('messages');
+    const isMine = msg.user === myName;
+    const div = document.createElement('div');
+    div.className = `msg ${isMine ? 'mine' : 'theirs'}`;
+    div.innerHTML = `
+      <div class="bubble">${escHtml(msg.text)}</div>
+      <div class="meta">${isMine ? '' : escHtml(msg.user) + ' · '}${formatTime(msg.time)}</div>
+    `;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function appendSystem(text) {
+    const box = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'system-msg';
+    div.textContent = text;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  socket.on('history', (msgs) => msgs.forEach(appendMessage));
+  socket.on('message', appendMessage);
+  socket.on('system', appendSystem);
+</script>
+</body>
+</html>
