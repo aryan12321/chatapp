@@ -29,10 +29,7 @@
     padding: 24px;
   }
   .screen.active { display: flex; }
-
   .screen h1 { font-size: 1.3rem; font-weight: 600; color: #fff; }
-  .screen p.hint { font-size: 0.8rem; color: #555; text-align: center; }
-
   .screen input {
     width: 100%;
     padding: 12px 16px;
@@ -46,7 +43,6 @@
   }
   .screen input:focus { border-color: #4f8fff; }
   .screen input.error { border-color: #e05555; }
-
   .screen button {
     width: 100%;
     padding: 12px;
@@ -60,7 +56,6 @@
     transition: background 0.2s;
   }
   .screen button:hover { background: #3a6fd8; }
-
   .err-msg { font-size: 0.8rem; color: #e05555; }
 
   /* Chat */
@@ -71,7 +66,6 @@
     max-width: 680px;
     height: 100dvh;
   }
-
   #chat-header {
     padding: 14px 20px;
     background: #161616;
@@ -108,9 +102,32 @@
   }
   .msg.mine .bubble { background: #4f8fff; color: #fff; border-bottom-right-radius: 4px; }
   .msg.theirs .bubble { background: #1e1e1e; color: #e0e0e0; border-bottom-left-radius: 4px; }
+  .msg .bubble img {
+    max-width: 260px;
+    max-height: 260px;
+    border-radius: 8px;
+    display: block;
+    cursor: pointer;
+  }
   .msg .meta { font-size: 0.7rem; color: #555; margin-top: 3px; padding: 0 4px; }
 
   .system-msg { align-self: center; font-size: 0.75rem; color: #444; padding: 4px 0; }
+
+  /* Image preview strip */
+  #img-preview {
+    display: none;
+    padding: 8px 16px;
+    background: #161616;
+    border-top: 1px solid #222;
+    align-items: center;
+    gap: 10px;
+  }
+  #img-preview img { height: 52px; border-radius: 6px; }
+  #img-preview span { font-size: 0.8rem; color: #888; flex: 1; }
+  #img-preview button {
+    background: none; border: none; color: #e05555;
+    font-size: 1.1rem; cursor: pointer; padding: 4px;
+  }
 
   #input-area {
     padding: 12px 16px;
@@ -132,6 +149,21 @@
     transition: border-color 0.2s;
   }
   #msg-input:focus { border-color: #4f8fff; }
+
+  .icon-btn {
+    width: 42px; height: 42px;
+    background: #1e1e1e;
+    border: 1px solid #2e2e2e;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.2s;
+    color: #888;
+    font-size: 1.1rem;
+  }
+  .icon-btn:hover { background: #2a2a2a; color: #fff; }
+
   #send-btn {
     width: 42px; height: 42px;
     background: #4f8fff;
@@ -143,11 +175,23 @@
   }
   #send-btn:hover { background: #3a6fd8; }
   #send-btn svg { width: 18px; height: 18px; fill: #fff; }
+
+  /* Lightbox */
+  #lightbox {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.9);
+    align-items: center; justify-content: center;
+    z-index: 100;
+    cursor: zoom-out;
+  }
+  #lightbox.open { display: flex; }
+  #lightbox img { max-width: 95vw; max-height: 95vh; border-radius: 8px; }
 </style>
 </head>
 <body>
 
-<!-- Step 1: PIN -->
+<!-- PIN -->
 <div id="pin-screen" class="screen active">
   <h1>🔒 Enter PIN</h1>
   <input id="pin-input" type="password" placeholder="PIN" maxlength="20" autofocus />
@@ -155,21 +199,32 @@
   <button onclick="verifyPin()">Continue</button>
 </div>
 
-<!-- Step 2: Name -->
+<!-- Name -->
 <div id="name-screen" class="screen">
   <h1>💬 Your name</h1>
   <input id="name-input" type="text" placeholder="Name" maxlength="24" />
   <button onclick="joinChat()">Join Chat</button>
 </div>
 
-<!-- Step 3: Chat -->
+<!-- Chat -->
 <div id="chat-screen">
   <div id="chat-header">
     <div class="dot"></div>
     <strong>Private Chat</strong>
   </div>
+
   <div id="messages"></div>
+
+  <!-- Image preview before send -->
+  <div id="img-preview">
+    <img id="preview-thumb" src="" />
+    <span id="preview-name"></span>
+    <button onclick="clearImage()" title="Remove">✕</button>
+  </div>
+
   <div id="input-area">
+    <button class="icon-btn" onclick="document.getElementById('file-input').click()" title="Send image">🖼️</button>
+    <input id="file-input" type="file" accept="image/*" style="display:none" onchange="handleFile(event)" />
     <input id="msg-input" type="text" placeholder="Type a message…" maxlength="1000" />
     <button id="send-btn" onclick="sendMsg()">
       <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>
@@ -177,16 +232,15 @@
   </div>
 </div>
 
+<!-- Lightbox -->
+<div id="lightbox" onclick="document.getElementById('lightbox').classList.remove('open')">
+  <img id="lightbox-img" src="" />
+</div>
+
 <script>
   const socket = io();
   let myName = '';
-
-  function show(id) {
-    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-    const el = document.getElementById(id);
-    if (el.classList.contains('screen')) el.classList.add('active');
-    else el.style.display = 'flex';
-  }
+  let pendingImage = null; // { dataUrl, name }
 
   // PIN
   function verifyPin() {
@@ -218,10 +272,44 @@
     document.getElementById('msg-input').focus();
   }
 
+  // Image pick
+  function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      alert('Image too large. Max 2MB.');
+      e.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      pendingImage = { dataUrl: ev.target.result, name: file.name };
+      document.getElementById('preview-thumb').src = ev.target.result;
+      document.getElementById('preview-name').textContent = file.name;
+      document.getElementById('img-preview').style.display = 'flex';
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  }
+
+  function clearImage() {
+    pendingImage = null;
+    document.getElementById('img-preview').style.display = 'none';
+    document.getElementById('preview-thumb').src = '';
+  }
+
   // Send
   function sendMsg() {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
+
+    if (pendingImage) {
+      socket.emit('image', { dataUrl: pendingImage.dataUrl, caption: text });
+      clearImage();
+      input.value = '';
+      return;
+    }
+
     if (!text) return;
     socket.emit('message', text);
     input.value = '';
@@ -234,6 +322,28 @@
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); }
   });
 
+  // Paste image
+  document.addEventListener('paste', (e) => {
+    if (!myName) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file.size > 2 * 1024 * 1024) { alert('Image too large. Max 2MB.'); return; }
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          pendingImage = { dataUrl: ev.target.result, name: 'pasted-image' };
+          document.getElementById('preview-thumb').src = ev.target.result;
+          document.getElementById('preview-name').textContent = 'Pasted image';
+          document.getElementById('img-preview').style.display = 'flex';
+        };
+        reader.readAsDataURL(file);
+        break;
+      }
+    }
+  });
+
   function formatTime(iso) {
     return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
@@ -242,13 +352,27 @@
     return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
+  function openLightbox(src) {
+    document.getElementById('lightbox-img').src = src;
+    document.getElementById('lightbox').classList.add('open');
+  }
+
   function appendMessage(msg) {
     const box = document.getElementById('messages');
     const isMine = msg.user === myName;
     const div = document.createElement('div');
     div.className = `msg ${isMine ? 'mine' : 'theirs'}`;
+
+    let content = '';
+    if (msg.type === 'image') {
+      content = `<img src="${msg.dataUrl}" onclick="openLightbox(this.src)" />`;
+      if (msg.caption) content += `<div style="margin-top:6px">${escHtml(msg.caption)}</div>`;
+    } else {
+      content = escHtml(msg.text);
+    }
+
     div.innerHTML = `
-      <div class="bubble">${escHtml(msg.text)}</div>
+      <div class="bubble">${content}</div>
       <div class="meta">${isMine ? '' : escHtml(msg.user) + ' · '}${formatTime(msg.time)}</div>
     `;
     box.appendChild(div);
@@ -266,6 +390,7 @@
 
   socket.on('history', (msgs) => msgs.forEach(appendMessage));
   socket.on('message', appendMessage);
+  socket.on('image', appendMessage);
   socket.on('system', appendSystem);
 </script>
 </body>
