@@ -2,40 +2,35 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-const fs = require('fs');
+const mongoose = require('mongoose');
 
 const app = express();
 const server = http.createServer(app);
-
-// Increase socket.io max buffer to ~15MB (base64 of 10MB file = ~13.3MB)
 const io = new Server(server, {
   maxHttpBufferSize: 15 * 1024 * 1024
 });
 
 const PORT = process.env.PORT || 3000;
-const PIN = process.env.CHAT_PIN || '1234';   // ← change this
+const PIN = process.env.CHAT_PIN || '1234';
+const MONGO_URI = process.env.MONGO_URI;
 const ROOM = 'main';
-const HISTORY_FILE = path.join(__dirname, 'chat-history.json');
 const MAX_MESSAGES = 200;
-const MAX_FILE_B64 = 14 * 1024 * 1024; // ~10MB file in base64
 
-// --- JSON file storage ---
-function loadHistory() {
-  try {
-    if (fs.existsSync(HISTORY_FILE)) {
-      return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
-    }
-  } catch (e) { console.error('Failed to load history:', e.message); }
-  return [];
-}
+// --- MongoDB schema ---
+const msgSchema = new mongoose.Schema({
+  type: { type: String, default: 'text' },
+  user: String,
+  text: String,
+  dataUrl: String,
+  caption: String,
+  time: String
+});
+const Message = mongoose.model('Message', msgSchema);
 
-function saveHistory(messages) {
-  try {
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(messages), 'utf8');
-  } catch (e) { console.error('Failed to save history:', e.message); }
-}
-
-const messages = loadHistory();
+// --- Connect to MongoDB ---
+mongoose.connect(MONGO_URI)
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => console.error('MongoDB error:', err));
 
 // --- Express ---
 app.use(express.static(path.join(__dirname, 'public')));
@@ -49,31 +44,35 @@ io.on('connection', (socket) => {
     else { cb({ ok: false }); }
   });
 
-  socket.on('join', (username) => {
+  socket.on('join', async (username) => {
     if (!socket.verified) return;
     socket.username = username;
     socket.join(ROOM);
-    socket.emit('history', messages);
+    // Load last 200 messages from DB
+    const history = await Message.find().sort({ _id: 1 }).limit(MAX_MESSAGES).lean();
+    socket.emit('history', history);
     io.to(ROOM).emit('system', `${username} joined`);
   });
 
-  socket.on('message', (text) => {
+  socket.on('message', async (text) => {
     if (!socket.verified || !socket.username) return;
-    const msg = { user: socket.username, text, time: new Date().toISOString() };
-    messages.push(msg);
-    if (messages.length > MAX_MESSAGES) messages.shift();
-    saveHistory(messages);
+    const msg = new Message({ type: 'text', user: socket.username, text, time: new Date().toISOString() });
+    await msg.save();
+    // Trim old messages
+    const count = await Message.countDocuments();
+    if (count > MAX_MESSAGES) {
+      const oldest = await Message.find().sort({ _id: 1 }).limit(count - MAX_MESSAGES);
+      await Message.deleteMany({ _id: { $in: oldest.map(m => m._id) } });
+    }
     io.to(ROOM).emit('message', msg);
   });
 
-  socket.on('image', ({ dataUrl, caption }) => {
+  socket.on('image', async ({ dataUrl, caption }) => {
     if (!socket.verified || !socket.username) return;
     if (!dataUrl || !dataUrl.startsWith('data:image/')) return;
-    if (dataUrl.length > MAX_FILE_B64) return;
-    const msg = { type: 'image', user: socket.username, dataUrl, caption: caption || '', time: new Date().toISOString() };
-    messages.push(msg);
-    if (messages.length > MAX_MESSAGES) messages.shift();
-    saveHistory(messages);
+    if (dataUrl.length > 14 * 1024 * 1024) return;
+    const msg = new Message({ type: 'image', user: socket.username, dataUrl, caption: caption || '', time: new Date().toISOString() });
+    await msg.save();
     io.to(ROOM).emit('image', msg);
   });
 
