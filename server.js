@@ -6,13 +6,18 @@ const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+
+// Increase socket.io max buffer to ~15MB (base64 of 10MB file = ~13.3MB)
+const io = new Server(server, {
+  maxHttpBufferSize: 15 * 1024 * 1024
+});
 
 const PORT = process.env.PORT || 3000;
 const PIN = process.env.CHAT_PIN || '1234';   // ← change this
 const ROOM = 'main';
 const HISTORY_FILE = path.join(__dirname, 'chat-history.json');
 const MAX_MESSAGES = 200;
+const MAX_FILE_B64 = 14 * 1024 * 1024; // ~10MB file in base64
 
 // --- JSON file storage ---
 function loadHistory() {
@@ -40,12 +45,8 @@ io.on('connection', (socket) => {
   socket.verified = false;
 
   socket.on('verify-pin', (pin, cb) => {
-    if (pin === PIN) {
-      socket.verified = true;
-      cb({ ok: true });
-    } else {
-      cb({ ok: false });
-    }
+    if (pin === PIN) { socket.verified = true; cb({ ok: true }); }
+    else { cb({ ok: false }); }
   });
 
   socket.on('join', (username) => {
@@ -68,7 +69,7 @@ io.on('connection', (socket) => {
   socket.on('image', ({ dataUrl, caption }) => {
     if (!socket.verified || !socket.username) return;
     if (!dataUrl || !dataUrl.startsWith('data:image/')) return;
-    if (dataUrl.length > 3 * 1024 * 1024) return; // ~2MB base64 limit
+    if (dataUrl.length > MAX_FILE_B64) return;
     const msg = { type: 'image', user: socket.username, dataUrl, caption: caption || '', time: new Date().toISOString() };
     messages.push(msg);
     if (messages.length > MAX_MESSAGES) messages.shift();
@@ -77,9 +78,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    if (socket.username) {
-      io.to(ROOM).emit('system', `${socket.username} left`);
-    }
+    if (socket.username) io.to(ROOM).emit('system', `${socket.username} left`);
   });
 });
 
